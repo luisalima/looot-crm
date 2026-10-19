@@ -3,15 +3,15 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { cleanDomain } from "@/lib/format";
 import { contactTimeline, dealDetail, type DealDetail, type TimelineEntry } from "@/lib/queries";
-import { DEFAULT_SETTINGS, loadSettings } from "@/lib/runner";
+import { DEFAULT_SETTINGS } from "@/lib/runner";
 import { getSession, IS_DEMO, resolveGate, type Session, type Store } from "@/lib/store";
 import { serverSupabase } from "@/lib/supabase/server";
-import { createPipelineRows, isClosed, loadPipelines, PIPELINE_TEMPLATES, stageKey, templateStages, type PipelineView } from "@/lib/pipelines";
+import { createPipelineRows, loadPipelines, PIPELINE_TEMPLATES, stageKey, templateStages } from "@/lib/pipelines";
+import { ActivityInput, addActivityRow, ContactInput, createCompanyRow, createContactRow, createDealRow, DealInput, DealPatch, id, moveDealRow, text, updateDealRow, type Result } from "@/lib/records";
 import { TABLE_NAMES, type Stage, type TeamRefusal, type TeamResult } from "@/lib/types";
 
-export type Result<T = object> = ({ ok: true } & T) | { ok: false; error: string };
+export type { Result };
 
 async function withStore<T = object>(fn: (store: Store, session: Session) => Promise<Result<T>>): Promise<Result<T>> {
   const gate = await resolveGate();
@@ -28,20 +28,9 @@ async function withStore<T = object>(fn: (store: Store, session: Session) => Pro
   }
 }
 
-const id = z.string().min(1).max(80);
-const text = (max: number) => z.string().trim().max(max);
 
 export async function createCompany(input: { name: string; domain: string }): Promise<Result<{ id: string }>> {
-  return withStore<{ id: string }>(async (store) => {
-    const name = input.name.trim();
-    const domain = cleanDomain(input.domain);
-    if (!name) return { ok: false, error: "Enter the company name." };
-    if (!domain) return { ok: false, error: "Enter a domain such as example.com." };
-    const settings = await loadSettings(store);
-    const made = await store.insertIgnore("companies", [{ name, domain, watched_pages: settings.default_pages.map((p) => `https://${domain}${p}`) }], ["domain"]);
-    if (!made.length) return { ok: false, error: `${domain} is already in your companies.` };
-    return { ok: true, id: made[0].id };
-  });
+  return withStore<{ id: string }>((store) => createCompanyRow(store, input));
 }
 
 const CompanyPatch = z.object({ name: text(120).min(1), industry: text(120).nullable(), employees: z.number().int().min(0).max(5_000_000).nullable(), hq: text(120).nullable(), description: text(600).nullable() }).partial();
@@ -64,15 +53,8 @@ export async function deleteRecords(table: "companies" | "contacts" | "deals", i
   });
 }
 
-const ContactInput = z.object({ company_id: id.nullable(), first_name: text(80).min(1), last_name: text(80), title: text(120).nullable(), email: z.string().trim().email().max(200).nullable().or(z.literal("").transform(() => null)), linkedin_url: text(300).nullable() });
-
 export async function createContact(input: z.input<typeof ContactInput>): Promise<Result<{ id: string }>> {
-  return withStore<{ id: string }>(async (store) => {
-    const p = ContactInput.safeParse(input);
-    if (!p.success) return { ok: false, error: "Enter a first name and a valid email, or leave the email empty." };
-    const [row] = await store.insert("contacts", [{ ...p.data, linkedin_url: p.data.linkedin_url || null, title: p.data.title || null, source: "manual" }]);
-    return { ok: true, id: row.id };
-  });
+  return withStore<{ id: string }>((store) => createContactRow(store, input));
 }
 
 const CandidateInput = z.array(z.object({ first_name: text(80), last_name: text(80), title: text(160).nullable(), linkedin_url: text(300).nullable(), company_id: id.nullable() })).min(1).max(25);
@@ -91,93 +73,13 @@ export async function addCandidates(input: z.input<typeof CandidateInput>): Prom
   });
 }
 
-const DealInput = z.object({
-  pipeline_id: id,
-  company_id: id.nullable().optional(),
-  contact_id: id.nullable().optional(),
-  name: text(160).min(1),
-  amount: z.number().min(0).max(1e10),
-  stage: z.string().min(1).max(40),
-  close_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
-});
-
-async function pipelineOf(store: Store, pipelineId: string): Promise<PipelineView | undefined> {
-  return (await loadPipelines(store)).find((p) => p.id === pipelineId);
-}
-
-/** The end of a stage column, so a new or moved card lands last. */
-async function endOf(store: Store, pipelineId: string, stage: Stage): Promise<number> {
-  const inStage = await store.all("deals", { pipeline_id: pipelineId, stage });
-  return inStage.reduce((m, d) => Math.max(m, d.position), 0) + 1000;
-}
-
 export async function createDeal(input: z.input<typeof DealInput>): Promise<Result<{ id: string }>> {
-  return withStore<{ id: string }>(async (store) => {
-    const p = DealInput.safeParse(input);
-    if (!p.success) return { ok: false, error: "Enter a deal name and pick who it is with." };
-    const pipeline = await pipelineOf(store, p.data.pipeline_id);
-    if (!pipeline) return { ok: false, error: "That pipeline does not exist." };
-    const stage = pipeline.stages.find((s) => s.key === p.data.stage);
-    if (!stage) return { ok: false, error: "Pick a stage of this pipeline." };
-    let companyId = p.data.company_id || null;
-    const contactId = pipeline.subject === "person" ? p.data.contact_id || null : null;
-    if (pipeline.subject === "person") {
-      const person = contactId ? await store.get("contacts", contactId) : null;
-      if (!person) return { ok: false, error: "Pick a person." };
-      companyId = person.company_id;
-    } else if (!companyId || !(await store.get("companies", companyId))) return { ok: false, error: "Pick a company." };
-    const now = new Date().toISOString();
-    const [row] = await store.insert("deals", [
-      {
-        pipeline_id: pipeline.id,
-        company_id: pipeline.subject === "person" ? null : companyId,
-        contact_id: contactId,
-        name: p.data.name,
-        stage: stage.key,
-        amount_cents: pipeline.trackAmount ? Math.round(p.data.amount * 100) : 0,
-        currency: pipeline.currency,
-        close_date: p.data.close_date,
-        position: await endOf(store, pipeline.id, stage.key),
-        stage_changed_at: now,
-      },
-    ]);
-    await store.insert("activities", [{ kind: "stage_change", company_id: companyId, contact_id: contactId, deal_id: row.id, meta: { from: null, to: stage.key, toLabel: stage.label } }]);
-    return { ok: true, id: row.id };
-  });
+  return withStore<{ id: string }>((store) => createDealRow(store, input));
 }
 
 /** Moves a deal to a stage of its pipeline (and a position inside it) and writes a stage-change activity when the stage differs. */
 export async function moveDeal(dealId: string, stage: Stage, position?: number, reason?: string): Promise<Result> {
-  return withStore(async (store) => {
-    const deal = await store.get("deals", dealId);
-    if (!deal) return { ok: false, error: "Deal not found." };
-    const pipeline = await pipelineOf(store, deal.pipeline_id);
-    const to = pipeline?.stages.find((s) => s.key === stage);
-    if (!pipeline || !to) return { ok: false, error: "Unknown stage." };
-    const fromStage = pipeline.stages.find((s) => s.key === deal.stage);
-    const pos = position === undefined || !Number.isFinite(position) ? await endOf(store, pipeline.id, stage) : position;
-    const changed = deal.stage !== stage;
-    const closed = isClosed(to.kind);
-    await store.update("deals", dealId, {
-      stage,
-      position: pos,
-      ...(changed ? { stage_changed_at: new Date().toISOString(), closed_reason: closed ? (reason?.trim().slice(0, 200) || null) : null } : {}),
-    });
-    if (changed) {
-      const fromLabel = fromStage?.label ?? deal.stage;
-      await store.insert("activities", [
-        {
-          kind: "stage_change",
-          company_id: deal.company_id ?? (deal.contact_id ? ((await store.get("contacts", deal.contact_id))?.company_id ?? null) : null),
-          contact_id: deal.contact_id,
-          deal_id: deal.id,
-          body: closed && reason ? reason.trim().slice(0, 200) : null,
-          meta: { from: deal.stage, to: stage, fromLabel, toLabel: to.label, label: `${fromLabel} to ${to.label}` },
-        },
-      ]);
-    }
-    return { ok: true };
-  });
+  return withStore((store) => moveDealRow(store, dealId, stage, position, reason));
 }
 
 /* ---------- Pipelines ---------- */
@@ -277,29 +179,12 @@ export async function deletePipeline(pipelineId: string): Promise<Result> {
   });
 }
 
-const DealPatch = z.object({ name: text(160).min(1), amount: z.number().min(0).max(1e10), close_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(), next_step: text(200).nullable(), next_step_due: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable() }).partial();
-
 export async function updateDeal(dealId: string, patch: z.infer<typeof DealPatch>): Promise<Result> {
-  return withStore(async (store) => {
-    const p = DealPatch.safeParse(patch);
-    if (!p.success) return { ok: false, error: "That value is not valid." };
-    const { amount, ...rest } = p.data;
-    const row = await store.update("deals", dealId, { ...rest, ...(rest.next_step === "" ? { next_step: null } : {}), ...(amount === undefined ? {} : { amount_cents: Math.round(amount * 100) }) });
-    return row ? { ok: true } : { ok: false, error: "Deal not found." };
-  });
+  return withStore((store) => updateDealRow(store, dealId, patch));
 }
 
-const ActivityInput = z.object({ kind: z.enum(["note", "call", "meeting", "task"]), body: text(4000).min(1), company_id: id.nullable(), contact_id: id.nullable().optional(), deal_id: id.nullable().optional(), due_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional() });
-
 export async function addActivity(input: z.input<typeof ActivityInput>): Promise<Result> {
-  return withStore(async (store) => {
-    const p = ActivityInput.safeParse(input);
-    if (!p.success) return { ok: false, error: "Write something first." };
-    await store.insert("activities", [
-      { kind: p.data.kind, body: p.data.body, company_id: p.data.company_id, contact_id: p.data.contact_id ?? null, deal_id: p.data.deal_id ?? null, due_at: p.data.kind === "task" && p.data.due_at ? `${p.data.due_at}T17:00:00.000Z` : null },
-    ]);
-    return { ok: true };
-  });
+  return withStore((store) => addActivityRow(store, input));
 }
 
 export async function setTaskDone(activityId: string, done: boolean): Promise<Result> {
