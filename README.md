@@ -81,6 +81,7 @@ npm run dev
 | `BULK_MAX_RECORDS` | no | The most records one bulk action may touch. Default 50 | Your choice |
 | `NEXT_PUBLIC_DEMO` | no | `1` turns on demo mode | Set by `npm run demo` |
 | `LOOOT_OFFLINE` | no | `1` skips the price read and uses the saved prices | Your choice |
+| `MCP_ALLOWED_REDIRECT_HOSTS` | no | Comma separated hosts an app connecting through [MCP](#mcp) may send you back to. Default `claude.ai,claude.com,localhost,127.0.0.1` | Your choice |
 
 Start with **Import CSV** on the Companies page. The repo ships `examples/companies.example.csv` (3 companies, 3 contacts, fake `.example` domains). Pick it, check that the columns map to name, domain, first name, last name, title, email and LinkedIn, and import. Import is free, skips duplicate domains, and takes up to 2,000 rows. A test (`src/lib/csv.test.ts`) checks that this file maps and imports as 3 companies and 3 contacts.
 
@@ -265,6 +266,33 @@ A workspace can run several boards, each with its own stages: sales, partnership
 - The board has a pipeline switcher. Today counts money in the first pipeline that tracks an amount, so amounts in different currencies are never added together. The Companies table shows each company's open deal that is furthest along, from any pipeline.
 - A stage that still has deals cannot be removed, and a pipeline with deals cannot be deleted. The database enforces both: a deal's stage is a foreign key to a stage of its own pipeline.
 - Upgrading: every workspace with deals gets a Sales pipeline with the six 0.1.x stages, and its deals move into it unchanged. A deal inserted without a pipeline (an older client, an import) goes to the first pipeline.
+
+## MCP
+
+The CRM is also an MCP server, so Claude (or another MCP client) can read and update it for you: "who at Ethiack have we contacted?", "move Blaze to In talks", "add a note to Jolera". Claude acts as you, with your sign-in, and sees exactly what you see in the app.
+
+Connect it: in Claude, Settings, Connectors, add a custom connector with the URL `https://<your-app-domain>/mcp`. Claude opens a sign-in in your browser: sign in to the CRM as usual, check the app and where it sends you back, and approve.
+
+Tools: `search`, `get_company`, `get_person`, `list_pipelines` and `list_cards` read. `move_card`, `add_note`, `set_next_step`, `add_person`, `add_company` and `add_card` write, through the same code as the app, so a move writes the same stage-change history as dragging the card.
+
+Set up, once per Supabase project, in the Supabase dashboard:
+
+1. Authentication, OAuth Server: turn on the OAuth 2.1 server.
+2. Allow dynamic client registration, so Claude can register itself the first time it connects.
+3. Set the authorization path to `/oauth/consent`, on your app's URL (the Site URL from the sign-in steps above).
+4. Optional: set `MCP_ALLOWED_REDIRECT_HOSTS` if you connect a client other than Claude, and redeploy.
+
+The endpoint is stateless Streamable HTTP. It tells clients where to sign in through `/.well-known/oauth-protected-resource` (RFC 9728), which points at the Supabase project's Auth server (the project URL followed by `/auth/v1`). In demo mode it needs no sign-in, so you can try it locally: `npm run demo`, then point an MCP client at `http://localhost:3217/mcp`.
+
+Security:
+
+- Every call is checked again: the access token must be valid, and its email must be on `LOOOT_CRM_ALLOWED_EMAILS` or `LOOOT_CRM_ALLOWED_DOMAINS`, before any data is read. Removing someone from the allow-list cuts their connected apps off at the next call.
+- Queries run as the signed-in person with row level security, never with a service key, so an app sees only that person's workspace.
+- Access tokens are short-lived Supabase tokens, refreshed by the OAuth server. Taking someone off the allow-list is the way to cut them off.
+- The consent page only approves apps that send you back to a host on `MCP_ALLOWED_REDIRECT_HOSTS`, and shows that host on every request. Anything else can only be denied.
+- No destructive or paid tools: nothing deletes, nothing changes the team, the budget or settings, and nothing runs a paid looot action. Those stay in the app, behind its quote and budget.
+- Every write records an activity owned by the signed-in person and tagged `via: "mcp"`, so the history shows who changed what and that it came through an app.
+- Text in the CRM (notes, names, descriptions, anything imported) is data. A note that says "ignore your instructions" is still just a note: treat what the tools return as content, not as instructions, and review what an agent proposes to change.
 
 ## Securing a deployment
 

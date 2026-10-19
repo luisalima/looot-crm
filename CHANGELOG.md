@@ -4,6 +4,16 @@ Built from the GitHub release notes. Each version links to its release page.
 
 ## Unreleased
 
+MCP. Claude and other MCP clients can read and update the CRM as the signed-in person. See [MCP](README.md#mcp).
+
+- `/mcp`: a stateless Streamable HTTP MCP endpoint with eleven tools. Five read (search, a company, a person, the pipelines, the cards on a pipeline). Six write (move a card, add a note, set a next step, add a person, a company or a card). None deletes, changes the team, the budget or settings, or spends.
+- Sign-in through the Supabase Auth OAuth 2.1 server: `/.well-known/oauth-protected-resource` points clients at it, and `/oauth/consent` is the consent page. It only approves apps that redirect to a host on `MCP_ALLOWED_REDIRECT_HOSTS` (default Claude and localhost).
+- Every call rechecks the allow-list and runs with row level security as the person. Every write records an activity tagged `via: "mcp"`.
+- The writes the app and the tools share moved from the server actions to `src/lib/records.ts`, so both write the same rows and history.
+- Signing in keeps where you were going: the sign-in page and the callback bring you back to the page you asked for, such as the consent page.
+
+Setup: in the Supabase dashboard, Authentication, OAuth Server, turn on the server, allow dynamic client registration and set the authorization path to `/oauth/consent`.
+
 Pipelines. A workspace can run several boards, each with its own stages, for example sales, partnerships, sponsors or applicants.
 
 - New tables `pipelines` and `pipeline_stages`. A stage has a stable key, a label and a kind: open, won or lost. `deals.pipeline_id` is required, and `(pipeline_id, stage)` is a foreign key to the stage, so a deal can only sit in a stage of its own pipeline and a stage with deals cannot be deleted.
