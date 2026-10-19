@@ -24,6 +24,25 @@ import {
 /** Whether a deal is still open: its stage is an open stage of its pipeline. A stage the pipeline does not know counts as open. */
 const openIn = (ix: ReturnType<typeof index>) => (d: Pick<Deal, "pipeline_id" | "stage">) => !isClosed(ix.stage(d.pipeline_id, d.stage)?.kind);
 
+/** A pipeline a record has deals in, with the stage of its furthest deal there. */
+export interface PipelineTag {
+  id: string;
+  name: string;
+  stage: string;
+  closed: boolean;
+}
+
+/** One tag per pipeline the deals are in, in board order. An open deal wins over a closed one, then the furthest stage. */
+export function pipelineTags(deals: Pick<Deal, "pipeline_id" | "stage">[], pipelines: PipelineView[]): PipelineTag[] {
+  return pipelines.flatMap((p) => {
+    const mine = deals.filter((d) => d.pipeline_id === p.id);
+    if (!mine.length) return [];
+    const best = mine.reduce((b, d) => (progress(p, d.stage) > progress(p, b.stage) ? d : b));
+    const stage = p.stages.find((s) => s.key === best.stage);
+    return [{ id: p.id, name: p.name, stage: stage?.label ?? best.stage, closed: isClosed(stage?.kind) }];
+  });
+}
+
 const DAY = 86_400_000;
 const byNewest = <T extends { created_at: string }>(a: T, b: T) => (a.created_at < b.created_at ? 1 : -1);
 
@@ -88,6 +107,7 @@ export interface CompanyRow {
   bestStage: string | null;
   /** "pipelineId:stageKey" of every open deal, for the stage filter. */
   openStages: string[];
+  pipelines: PipelineTag[];
   contacts: number;
   hasEmail: boolean;
   lastActivity: string | null;
@@ -138,6 +158,7 @@ export async function companyRows(store: Store, now: Date = new Date()): Promise
       openValueCents: open.filter(counts).reduce((s, d) => s + d.amount_cents, 0),
       bestStage: best ? ix.label(best.pipeline_id, best.stage) : null,
       openStages: open.map((d) => `${d.pipeline_id}:${d.stage}`),
+      pipelines: pipelineTags(gd.get(c.id) ?? [], pipelines),
       contacts: (gc.get(c.id) ?? []).length,
       hasEmail: (gc.get(c.id) ?? []).some((p) => !!p.email),
       lastActivity: acts.length ? acts.reduce((m, a) => (a.created_at > m ? a.created_at : m), acts[0].created_at) : null,
@@ -273,10 +294,12 @@ export interface PersonRow extends Contact {
   lastActivity: string | null;
   /** When a looot run found this contact's work email. Null when the email was typed or imported. */
   emailFoundAt: string | null;
+  /** Pipelines of the deals about this person, and of their company's deals. */
+  pipelines: PipelineTag[];
 }
 
 export async function personRows(store: Store, companyId?: string): Promise<PersonRow[]> {
-  const [contacts, companies, activities, finds] = await Promise.all([store.all("contacts", companyId ? { company_id: companyId } : undefined), store.all("companies"), store.all("activities"), store.all("runs", { job_id: "people.email.find", outcome: "data" })]);
+  const [contacts, companies, activities, finds, deals, pipelines] = await Promise.all([store.all("contacts", companyId ? { company_id: companyId } : undefined), store.all("companies"), store.all("activities"), store.all("runs", { job_id: "people.email.find", outcome: "data" }), store.all("deals"), loadPipelines(store)]);
   const found = new Map<string, string>();
   for (const r of finds) if (r.target_id && (!found.has(r.target_id) || r.created_at > found.get(r.target_id)!)) found.set(r.target_id, r.created_at);
   const co = new Map(companies.map((c) => [c.id, c]));
@@ -290,6 +313,7 @@ export async function personRows(store: Store, companyId?: string): Promise<Pers
     lastActivity: last.get(c.id) ?? null,
     // Contacts that looot created carry no find run of their own. Their email came with the search.
     emailFoundAt: c.email ? (found.get(c.id) ?? (c.source === "looot" ? (c.email_checked_at ?? c.created_at) : null)) : null,
+    pipelines: pipelineTags(deals.filter((d) => d.contact_id === c.id || (!!c.company_id && d.company_id === c.company_id)), pipelines),
   }));
 }
 

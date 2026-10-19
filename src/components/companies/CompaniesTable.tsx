@@ -6,7 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef, type RowSelectionState, type VisibilityState } from "@tanstack/react-table";
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Columns3, Plus, RefreshCw, Search, Sparkles, Trash2, Upload, X } from "lucide-react";
 import { Sparkline } from "@/components/charts";
-import { ChipLink, EmptyState, Monogram, ScoreChip, SignalIcon } from "@/components/common";
+import { ChipLink, EmptyState, Monogram, PipelineTags, ScoreChip, SignalIcon } from "@/components/common";
 import { useQuote } from "@/components/quote";
 import { useHotkeys } from "@/components/shell/hotkeys";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,7 @@ import type { CompanyRow } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { AddCompanyDialog, ConfirmDelete, ImportSheet } from "./dialogs";
 
-const HIDEABLE: [string, string][] = [["topSignal", "Top signal"], ["industry", "Industry"], ["employees", "Employees"], ["openValueCents", "Open deal value"], ["contacts", "Contacts"], ["lastActivity", "Last activity"], ["intentCheckedAt", "Intent checked"]];
+const HIDEABLE: [string, string][] = [["pipelines", "Pipelines"], ["topSignal", "Top signal"], ["industry", "Industry"], ["employees", "Employees"], ["openValueCents", "Open deal value"], ["contacts", "Contacts"], ["lastActivity", "Last activity"], ["intentCheckedAt", "Intent checked"]];
 
 export interface CompaniesQuery {
   q: string;
@@ -92,6 +92,7 @@ export function CompaniesTable({ rows, total, pageSize, query, bulkMax, domains,
           <span className="min-w-0 shrink-[20] truncate text-xs text-muted-foreground max-2xl:hidden">{row.original.domain}</span>
         </Link>
       ) },
+      { id: "pipelines", header: "Pipelines", enableSorting: false, cell: ({ row }) => <PipelineTags tags={row.original.pipelines} /> },
       { id: "score", header: "Score", cell: ({ row }) => (
         <span className="flex items-center gap-2">
           <ScoreChip score={row.original.score} />
@@ -227,7 +228,7 @@ export function CompaniesTable({ rows, total, pageSize, query, bulkMax, domains,
       ) : (
         <>
           <div className="scroll-thin mt-3 relative overflow-x-auto rounded-md border border-border bg-surface max-sm:hidden">
-            <Table className="min-w-[1040px]">
+            <Table className="min-w-[1220px]">
               <thead className="sticky top-0 z-10">
                 {table.getHeaderGroups().map((hg) => (
                   <tr key={hg.id}>
@@ -264,7 +265,7 @@ export function CompaniesTable({ rows, total, pageSize, query, bulkMax, domains,
                       {row.getVisibleCells().map((cell) => {
                         const right = (cell.column.columnDef.meta as { right?: boolean } | undefined)?.right;
                         return (
-                          <Td key={cell.id} className={cn("px-2 transition-colors duration-100", cell.column.id === "topSignal" ? "max-w-44 2xl:max-w-64" : cell.column.id === "industry" ? "max-w-36 2xl:max-w-56" : "max-w-56", bg, cell.column.id === "name" && "sticky left-9 z-[5] w-60 min-w-52 max-w-60 border-r", right && "text-right")}>
+                          <Td key={cell.id} className={cn("px-2 transition-colors duration-100", cell.column.id === "topSignal" ? "max-w-44 2xl:max-w-64" : cell.column.id === "pipelines" ? "min-w-44 max-w-72" : cell.column.id === "industry" ? "max-w-36 2xl:max-w-56" : "max-w-56", bg, cell.column.id === "name" && "sticky left-9 z-[5] w-60 min-w-52 max-w-60 border-r", right && "text-right")}>
                             {flexRender(cell.column.columnDef.cell, cell.getContext())}
                           </Td>
                         );
@@ -286,6 +287,7 @@ export function CompaniesTable({ rows, total, pageSize, query, bulkMax, domains,
                       <span className="truncate text-sm font-medium">{r.name}</span>
                       <ScoreChip score={r.score} className="ml-auto" />
                     </span>
+                    {r.pipelines.length > 0 && <PipelineTags tags={r.pipelines} plain className="mt-1" />}
                     <span className="mt-0.5 flex items-center gap-1.5 text-13 text-muted-foreground">
                       {r.topSignal ? (<><SignalIcon kind={r.topSignal.kind} className="size-3.5" /><span className="truncate">{r.topSignal.title}</span></>) : (r.intentCheckedAt ? "No signal in 90 days" : "Not checked yet")}
                     </span>
