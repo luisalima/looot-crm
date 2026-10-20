@@ -38,6 +38,9 @@ export const PUBLIC_ROUTES = ["/auth/callback", "/.well-known/oauth-protected-re
 /** Routes that take a bearer token instead of the cookie session. They have their own tests in auth.routes.test.ts. */
 export const BEARER_ROUTES = ["/mcp"];
 
+/** Scheduled jobs. They take the CRON_SECRET bearer from Vercel Cron, never a session. Tested in auth.routes.test.ts. */
+export const CRON_ROUTES = ["/api/cron/prospects", "/api/cron/signals"];
+
 /** Names of the exported server actions in src/app/actions.ts. */
 export function actionNames(): string[] {
   const src = fs.readFileSync(path.join(ROOT, "actions.ts"), "utf8");

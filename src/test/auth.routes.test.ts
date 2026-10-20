@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { actionNames, BEARER_ROUTES, PUBLIC_ROUTES, routeMap } from "./routeMap";
+import { actionNames, BEARER_ROUTES, CRON_ROUTES, PUBLIC_ROUTES, routeMap } from "./routeMap";
 
 type FakeUser = { id: string; email: string; email_confirmed_at: string } | null;
 let user: FakeUser = null;
@@ -51,7 +51,7 @@ async function call(file: string, method: string): Promise<{ status: number; tou
   }
 }
 
-const routes = routeMap().filter((r) => !PUBLIC_ROUTES.includes(r.url) && !BEARER_ROUTES.includes(r.url));
+const routes = routeMap().filter((r) => !PUBLIC_ROUTES.includes(r.url) && !BEARER_ROUTES.includes(r.url) && !CRON_ROUTES.includes(r.url));
 
 beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_DEMO", "");
@@ -204,8 +204,39 @@ describe("OAuth metadata", () => {
 });
 
 describe("cron and webhooks", () => {
-  it("the app has none, so a new one must be added to the route map and gated", () => {
+  it("every one is listed in CRON_ROUTES, so it gets the tests below", () => {
     const hooks = routeMap().filter((r) => /cron|webhook/i.test(r.url));
-    expect(hooks).toEqual([]);
+    expect(hooks.map((r) => r.url)).toEqual(CRON_ROUTES);
+    for (const r of hooks) expect(r.methods).toEqual(["GET"]);
+  });
+  const SECRET = "s3cret-for-the-cron-tests";
+  const cron = async (url: string, auth?: string) => {
+    const file = routeMap().find((r) => r.url === url)!.file;
+    const mod = await import(/* @vite-ignore */ file);
+    const res: Response = await mod.GET(new Request(`http://localhost${url}`, { headers: auth ? { authorization: auth } : {} }));
+    return res.status;
+  };
+  describe.each(CRON_ROUTES)("%s", (url) => {
+    it("is closed while CRON_SECRET is unset, even with a signed-in user", async () => {
+      vi.stubEnv("CRON_SECRET", "");
+      user = signedIn("owner@acme.example");
+      expect(await cron(url, "Bearer ")).toBe(503);
+      expect(joined).toBe(false);
+    });
+    it("refuses a missing or wrong secret, and a cookie session does not help", async () => {
+      vi.stubEnv("CRON_SECRET", SECRET);
+      user = signedIn("owner@acme.example");
+      expect(await cron(url)).toBe(401);
+      expect(await cron(url, `Bearer ${SECRET}x`)).toBe(401);
+      expect(await cron(url, SECRET)).toBe(401);
+      expect(joined).toBe(false);
+    });
+    it("with the right secret, still needs the bot user before it touches data", async () => {
+      vi.stubEnv("CRON_SECRET", SECRET);
+      vi.stubEnv("CRON_BOT_EMAIL", "");
+      vi.stubEnv("CRON_BOT_PASSWORD", "");
+      expect(await cron(url, `Bearer ${SECRET}`)).toBe(503);
+      expect(joined).toBe(false);
+    });
   });
 });

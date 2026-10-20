@@ -294,11 +294,56 @@ Security:
 - Every write records an activity owned by the signed-in person and tagged `via: "mcp"`, so the history shows who changed what and that it came through an app.
 - Text in the CRM (notes, names, descriptions, anything imported) is data. A note that says "ignore your instructions" is still just a note: treat what the tools return as content, not as instructions, and review what an agent proposes to change.
 
+## Scheduled jobs
+
+Three Vercel Cron jobs (in `vercel.json`) keep the intent data fresh without anyone clicking. Each posts what it found to a Slack channel.
+
+| Route | When (UTC) | What it does |
+| --- | --- | --- |
+| `/api/cron/signals?step=news` | Mon and Thu 07:00 | News check for the open cards on `CRON_SIGNAL_BOARDS`, narrowed by `CRON_NEWS_KEYWORDS` (security news by default). One `news.search` per company, the least recently checked first, up to `CRON_MAX_COMPANIES`. |
+| `/api/cron/signals?step=hiring` | Mon 07:30 | Hiring check for the open cards on `CRON_HIRING_BOARDS`: open roles at the company whose title contains one of `CRON_HIRING_KEYWORDS` (security roles by default). |
+| `/api/cron/prospects` | Mon 08:00 | One people search (Icypeas) for people with `CRON_PROSPECT_TITLES` in `CRON_PROSPECT_COUNTRY`, optionally only in `CRON_PROSPECT_INDUSTRIES`. Skipped until a country is set. Up to `CRON_PROSPECTS_PER_RUN` people new to the CRM become cards at the first open stage of `CRON_PROSPECT_BOARD`, with the next step "`CRON_PROSPECT_REVIEWER`: review prospect (pick or decline)". No email is looked up. |
+
+The checks use the same paid path as the Intent tab: every call is quoted, capped, reserved against the workspace's daily and monthly budget, and shown on the Spend page. On top of that a scheduled run never spends more than `CRON_RUN_CAP_USD` (default $0.50), all scheduled runs together never more than `CRON_WEEK_CAP_USD` in 7 days (default $1.50), and a run is skipped when the looot balance cannot cover its estimate. A repeated call on the same day (news) or week (hiring, prospects) replays the stored run and spends nothing. Headlines and roles already seen are not reported again. Signals land on each company's Intent tab and count in its score; security headlines are tagged `security`.
+
+Set up:
+
+1. A bot user for the jobs, so they run under row level security like a person and need no service key. In Supabase, Authentication, Users, add a user with an email and a strong password (for example `crm-bot@your-domain`) and tick Auto Confirm User, then invite that email from Settings, Team. The first scheduled run signs in as the bot and claims the invitation. Invite it before the first run, and set `CRON_WORKSPACE_ID`: a bot with no invitation would otherwise get an empty workspace of its own, which that check refuses. The bot does not need to be on the allow-list: it never signs in to the app.
+2. On Vercel: `CRON_SECRET` (16+ random characters; Vercel sends it as the bearer), `CRON_BOT_EMAIL`, `CRON_BOT_PASSWORD`, `CRON_SLACK_WEBHOOK_URL` (a Slack incoming webhook), and the settings below that you want to change.
+3. Redeploy. To run one by hand: `curl -H "Authorization: Bearer $CRON_SECRET" https://<your-app-domain>/api/cron/signals?step=news`.
+
+The routes refuse every call while `CRON_SECRET` is unset, and any call without that exact bearer; a browser session does not open them.
+
+Settings (all optional). Lists are comma separated, or semicolon separated when the items hold commas, as some LinkedIn industries do.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `CRON_WORKSPACE_ID` | the bot's workspace | The workspace the jobs work in. The bot must be a member. |
+| `CRON_SIGNAL_BOARDS` | `Sales` | Company boards whose open cards get the news check. |
+| `CRON_HIRING_BOARDS` | `Sales` | Company boards whose open cards get the hiring check. |
+| `CRON_MAX_COMPANIES` | `40` | Companies checked per signal run. |
+| `CRON_NEWS_KEYWORDS` | `cybersecurity, breach, ransomware, data leak, CISO` | Words that narrow the news check, joined with OR. Add other languages here. |
+| `CRON_HIRING_KEYWORDS` | `security, cyber, CISO, SOC analyst` | A job title must contain one of these to count. |
+| `CRON_PROSPECT_COUNTRY` | unset (prospects skip) | Two-letter country code the prospect search looks in. |
+| `CRON_PROSPECT_TITLES` | CISO and other head-of-security titles | Job titles the prospect search looks for. |
+| `CRON_PROSPECT_INDUSTRIES` | unset (any industry) | LinkedIn company industries to keep. |
+| `CRON_PROSPECT_LOCAL_ONLY` | off | `1` keeps only organisations based in the country (a site on its country domain or an address there), not foreign ones with local staff. Local ones are always ranked first. |
+| `CRON_PROSPECT_BOARD` | `Sales` | The company board new prospects go to, at its first open stage. |
+| `CRON_PROSPECT_REVIEWER` | `Team` | Who reviews new prospects; goes into the card's next step. |
+| `CRON_PROSPECT_CARD_NAME` | `Prospect` | The name new prospect cards get. |
+| `CRON_PROSPECTS_PER_RUN` | `10` (max 25) | Prospects added per run. |
+| `CRON_OPENER_PITCH` | unset | One sentence about what you offer, added to every suggested opener in Slack. |
+| `CRON_OPENER_SUFFIX` | unset | Appended after the pitch, e.g. an event's dates and venue. |
+| `CRON_RUN_CAP_USD` | `0.50` | The most one scheduled run may spend. |
+| `CRON_WEEK_CAP_USD` | `1.50` | The most all scheduled runs may spend in 7 days. |
+
+In Slack, a run lists only headlines that name the company, one per company, cards on the first board of `CRON_SIGNAL_BOARDS` first; only those cards get an opener. Every headline stays on the company's Intent tab.
+
 ## Securing a deployment
 
 Versions before 0.1.4 let any signed-in Supabase user use the workspace. If your Supabase project allows open sign-ups (the default), a stranger could create an account, read the data, change settings and spend your `LOOOT_TOKEN`. Upgrade and set the allow-list.
 
-What is public: `/login`, `/auth/callback` (the sign-in landing), `/setup` and `/not-authorised` (static messages), and static assets. Everything else is private: every page, `/api/quote`, `/api/actions`, `/api/actions/[key]`, `/api/balance`, `/api/export`, `/api/import` and every server action. An unlisted path is private. The app has no webhook or cron route.
+What is public: `/login`, `/auth/callback` (the sign-in landing), `/setup` and `/not-authorised` (static messages), and static assets. Everything else is private: every page, `/api/quote`, `/api/actions`, `/api/actions/[key]`, `/api/balance`, `/api/export`, `/api/import` and every server action. An unlisted path is private. The `/api/cron/*` routes are not sessions at all: they need the `CRON_SECRET` bearer (see [Scheduled jobs](#scheduled-jobs)).
 
 How access works:
 

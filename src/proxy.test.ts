@@ -53,10 +53,10 @@ describe("proxy", () => {
     const { proxy } = await import("./proxy");
     expect(loc(await proxy(req("/oauth/consent?authorization_id=a1")))).toBe("http://localhost:3000/login?next=%2Foauth%2Fconsent%3Fauthorization_id%3Da1");
   });
-  it("leaves /mcp and the OAuth metadata to their own bearer check", async () => {
+  it("leaves /mcp, the OAuth metadata and the cron routes to their own bearer check", async () => {
     const { proxy } = await import("./proxy");
     user = off;
-    for (const p of ["/mcp", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
+    for (const p of ["/mcp", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/api/cron/signals", "/api/cron/prospects"]) {
       const res = await proxy(req(p));
       expect(res.status, p).toBe(200);
       expect(loc(res), p).toBeNull();
