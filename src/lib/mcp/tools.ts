@@ -65,7 +65,7 @@ export const CRM_TOOLS: CrmTool[] = [
     name: "search",
     title: "Search the CRM",
     description: "Find companies (by name or domain) and people (by name, title or company). Returns ids for the other tools and the pipelines each record is in.",
-    input: { query: z.string().trim().min(1).max(120).describe("Words to look for, e.g. 'ethiack' or 'pentester'"), limit: z.number().int().min(1).max(50).optional().describe("Most results per kind, default 15") },
+    input: { query: z.string().trim().min(1).max(120).describe("Words to look for, e.g. 'harborline' or 'pentester'"), limit: z.number().int().min(1).max(50).optional().describe("Most results per kind, default 15") },
     readOnly: true,
     run: async (store, a) => {
       const q = String(a.query).toLowerCase();

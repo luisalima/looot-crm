@@ -269,7 +269,7 @@ A workspace can run several boards, each with its own stages: sales, partnership
 
 ## MCP
 
-The CRM is also an MCP server, so Claude (or another MCP client) can read and update it for you: "who at Ethiack have we contacted?", "move Blaze to In talks", "add a note to Jolera". Claude acts as you, with your sign-in, and sees exactly what you see in the app.
+The CRM is also an MCP server, so Claude (or another MCP client) can read and update it for you: "who at Harborline have we contacted?", "move Calder Ridge to In talks", "add a note to Lowmoor Timber". Claude acts as you, with your sign-in, and sees exactly what you see in the app.
 
 Connect it: in Claude, Settings, Connectors, add a custom connector with the URL `https://<your-app-domain>/mcp`. Claude opens a sign-in in your browser: sign in to the CRM as usual, check the app and where it sends you back, and approve.
 
